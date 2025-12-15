@@ -1,5 +1,13 @@
 #!/bin/bash
 
+li1_prefs=("bip" "d_jolt" "eip" "fnlmma" "mana" "next_line" "no" "pips" "tap")
+for ((i = 0; i < ${#li1_prefs[@]}; i++)); do
+  pref=${li1_prefs[$i]}
+  ./build_champsim.sh bimodal ${pref} no no no lru 1
+  ./run_champsim.sh bimodal-${pref}-no-no-no-lru-1core 1 10 ../traces/ipc1_public/server_024.champsimtrace.xz
+done
+
+
 li1_prefs=("barca" "bip" "d_jolt" "eip" "fnlmma" "mana" "next_line" "no" "pips" "tap")
 for ((i = 0; i < ${#li1_prefs[@]}; i++)); do
   pref=${li1_prefs[$i]}
