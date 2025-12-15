@@ -1,0 +1,7 @@
+break main
+break src/main.cc:497
+break prefetcher/l1i_prefetcher.cc:267
+break prefetcher/l1i_prefetcher.cc:243
+break prefetcher/l1i_prefetcher.cc:261
+break prefetcher/l1i_prefetcher.cc:64
+break prefetcher/l1i_prefetcher.cc:51
