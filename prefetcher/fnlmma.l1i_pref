@@ -54,6 +54,7 @@ JustFnl (uint64_t Block)
   uint64_t set = (Block & (SIZEWAYFILTERFNL - 1));
   uint64_t tag = (Block / SIZEWAYFILTERFNL) & ((1 << 15) - 1);
 
+  cout << "JustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << endl;
   for (int i = NBWAYFILTERFNL - 1; i > 0; i--)
     JUSTNLPREFETCH[set][i] = JUSTNLPREFETCH[set][i - 1];
   JUSTNLPREFETCH[set][0] = tag;
@@ -67,6 +68,7 @@ WasNotJustFnl (uint64_t Block)
   uint64_t prev = Block - 1;
   int set = (prev & (SIZEWAYFILTERFNL - 1));
   uint64_t tag = (prev / SIZEWAYFILTERFNL) & ((1 << 15) - 1);
+  cout << "WasNotJustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << endl;
   for (int i = 0; i < NBWAYFILTERFNL; i++)
     if (JUSTNLPREFETCH[set][i] == tag)
       return false;
@@ -96,6 +98,7 @@ IsInIShadow (uint64_t Block, bool Insert)
       ShadowICache[set][i] = ShadowICache[set][i - 1];
     ShadowICache[set][0] = tag;
   }
+  cout << "IsInIShadow -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << ", Hit: 0x" << Hit << endl;
   return (Hit != -1);
 }
 
@@ -261,7 +264,7 @@ O3_CPU::l1i_prefetcher_branch_operate (uint64_t ip, uint8_t branch_type,
 O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
     uint8_t cache_hit, uint8_t prefetch_hit)
 {
-  //cout << "access v_addr: 0x" << hex << v_addr << dec << endl;
+  cout << "access v_addr: 0x" << hex << v_addr << dec << endl;
   uint64_t Block = v_addr >> LOG2_BLOCK_SIZE;
   int index = Block & (FNL_NBENTRIES - 1);
   bool ShadowMiss = (!IsInIShadow (Block, 1));
@@ -462,7 +465,7 @@ O3_CPU::l1i_prefetcher_cache_fill (uint64_t v_addr,
     uint32_t set, uint32_t way,
     uint8_t prefetch, uint64_t evicted_v_addr)
 {
-  //cout << hex << "fill: 0x" << v_addr << dec << " " << set << " " << way << " " << (uint32_t)prefetch << " " << hex << "evict: 0x" << evicted_v_addr << dec << endl;
+  cout << hex << "fill: 0x" << v_addr << dec << " " << set << " " << way << " " << (uint32_t)prefetch << " " << hex << "evict: 0x" << evicted_v_addr << dec << endl;
 }
 
   void
