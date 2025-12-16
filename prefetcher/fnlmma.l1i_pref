@@ -54,7 +54,7 @@ JustFnl (uint64_t Block)
   uint64_t set = (Block & (SIZEWAYFILTERFNL - 1));
   uint64_t tag = (Block / SIZEWAYFILTERFNL) & ((1 << 15) - 1);
 
-  cout << "JustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << endl;
+  cout << "JustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << dec << endl;
   for (int i = NBWAYFILTERFNL - 1; i > 0; i--)
     JUSTNLPREFETCH[set][i] = JUSTNLPREFETCH[set][i - 1];
   JUSTNLPREFETCH[set][0] = tag;
@@ -68,11 +68,46 @@ WasNotJustFnl (uint64_t Block)
   uint64_t prev = Block - 1;
   int set = (prev & (SIZEWAYFILTERFNL - 1));
   uint64_t tag = (prev / SIZEWAYFILTERFNL) & ((1 << 15) - 1);
-  cout << "WasNotJustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << endl;
+  bool ret = true;
   for (int i = 0; i < NBWAYFILTERFNL; i++)
-    if (JUSTNLPREFETCH[set][i] == tag)
-      return false;
-  return true;
+    if (JUSTNLPREFETCH[set][i] == tag){
+      ret = false;
+      break;
+    }
+
+  cout << "WasNotJustFnl -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << ", WasNotJustFnl: " << ret << dec << endl;
+  return ret;
+}
+
+bool
+WasNotJustAHEAD (uint64_t Block)
+{
+  bool ret = true;
+  //verify that the block has not been already prefetched by MMA recently
+  for (int i = MMA_FILT_SIZE - 1; i >= 0; i--)
+    if (PREVPRED[i] == Block)
+    {
+      ret = false;
+      break;
+    }
+
+  return ret;
+}
+
+bool
+WasNotJustMMA (uint64_t Block)
+{
+  bool ret = true;
+  for (int i = MMA_FILT_SIZE - 1; i >= 0; i--)
+  {
+    if (PREVPRED[i] == Block)
+    {
+      ret = false;
+      break;
+    }
+  }
+
+  return ret;
 }
 
 ///////////////////////////////
@@ -98,7 +133,7 @@ IsInIShadow (uint64_t Block, bool Insert)
       ShadowICache[set][i] = ShadowICache[set][i - 1];
     ShadowICache[set][0] = tag;
   }
-  cout << "IsInIShadow -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << ", Hit: 0x" << Hit << endl;
+  cout << "IsInIShadow -> Block: 0x" << hex << Block << ", set: 0x" << set << ", tag: 0x" << tag << ", Hit: 0x" << Hit << dec << endl;
   return (Hit != -1);
 }
 
@@ -180,7 +215,6 @@ class PredictMiss
       {
         index[i] = (A ^ B) + (i << LOGWAYNEXTMISS);
         A = (A >> 7) + ((A & 127) << (LOGWAYNEXTMISS - 7));
-
       }
       uint64_t tag = (PrevAddr >> LOGWAYNEXTMISS) & ((1 << LOGTAGNEXTMISS) - 1);
       int NHIT = -1;
@@ -192,16 +226,12 @@ class PredictMiss
           NHIT = i;		//increase the confidence
           if (NBlock[index[i]] == Block)
           {
-
             U[index[i]] = 1;
           }
           else
           {
             NBlock[index[i]] = Block;
             U[index[i]] = 0;
-
-
-
           };
           return;
         }
@@ -238,6 +268,41 @@ class PredictMiss
 
 PredictMiss AHEAD, AHEADphist;
 
+/////////////////////////////////
+
+uint64_t PrefAheadPredictedBlock(uint64_t Block, O3_CPU& ooo_cpu) {
+  uint64_t ret_block = Block;
+  if (Block != 0)
+  {
+    if (WasNotJustMMA(Block))
+    {
+      int index = (Block) & (FNL_NBENTRIES - 1);
+      // avoid issing prefetch the block if the previous block was prefetched
+
+      ooo_cpu.prefetch_code_line(Block<<LOG2_BLOCK_SIZE);
+
+      if (WorthPF[index] > 0)
+      {
+        for (int i = 1; i <= MAXFNL; i++)
+        {
+          uint64_t pf_Block = Block + i;
+          if ((WasNotJustFnl (Block))
+              || (i == MAXFNL))
+            ooo_cpu.prefetch_code_line(pf_Block<<LOG2_BLOCK_SIZE);
+          if (WorthPF[(index + i) & (FNL_NBENTRIES - 1)] == 0)
+            break;
+        }
+#ifdef  FITERFNLON
+        JustFnl (Block);
+#endif
+      }
+    } else {
+      ret_block = 0;
+    }
+  }
+  return ret_block;
+}
+
 #define 	PrefCodeBlock(X) prefetch_code_line ((X)<<LOG2_BLOCK_SIZE)
 // prefetch  works on  blocks
 
@@ -264,12 +329,16 @@ O3_CPU::l1i_prefetcher_branch_operate (uint64_t ip, uint8_t branch_type,
 O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
     uint8_t cache_hit, uint8_t prefetch_hit)
 {
-  cout << "access v_addr: 0x" << hex << v_addr << dec << endl;
+  cout << "access v_addr: 0x" << hex << v_addr
+    << ", cache_hit: 0x" << static_cast<int>(cache_hit)
+    << ", prefetch_hit: 0x" << static_cast<int>(prefetch_hit)
+    << dec << endl;
   uint64_t Block = v_addr >> LOG2_BLOCK_SIZE;
   int index = Block & (FNL_NBENTRIES - 1);
   bool ShadowMiss = (!IsInIShadow (Block, 1));
   uint64_t AheadPredictedBlock = 0;
   // prefetch is triggered only on misses on the Shadow I-cache
+  cout << "ShadowMiss: " << ShadowMiss << endl;
   if (ShadowMiss)
   {
     // The FNL prefetcher
@@ -282,6 +351,7 @@ O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
         WorthPF[previndex] = 3;
     }
 
+    cout << dec << "start ptReset: " << ptReset << endl;
     for (int i = ptReset; i < ptReset + (FNL_NBENTRIES / PERIODRESET); i++)
       // Once a block has become worth prefetching, it keeps this status for at least three intervals of PERIODRESET I-Shadow misses
     {
@@ -293,21 +363,13 @@ O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
     }
     ptReset += (FNL_NBENTRIES / PERIODRESET);
     ptReset &= (FNL_NBENTRIES - 1);
+    cout << "end ptReset: " << ptReset << endl;
 
     ////////
     // Next-line prefetch
     if (WorthPF[index] > 0)
     {
-      bool NotJustAHEAD = true;
-      //verify that the block has not been already prefetched by MMA recently
-      for (int i = MMA_FILT_SIZE - 1; i >= 0; i--)
-        if (PREVPRED[i] == Block)
-        {
-          NotJustAHEAD = false;
-          break;
-        }
-      if (NotJustAHEAD)
-
+      if (WasNotJustAHEAD(Block))
       {
         for (int i = 1; i <= MAXFNL; i++)
         {
@@ -331,93 +393,18 @@ O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
 #ifdef AHEADPRED
     /////
 
-    AheadPredictedBlock =
-      AHEADphist.AheadPredict ((v_addr >> 2) ^ (PREVADDR[NSHIFT - 1] << 1));
-    if (AheadPredictedBlock != 0)
-    {
-      bool NotJustMMA = true;
-      for (int i = MMA_FILT_SIZE - 1; i >= 0; i--)
-      {
-        if (PREVPRED[i] == (AheadPredictedBlock))
-        {
-          NotJustMMA = false;
-          break;
-        }
-      }
-      if (!NotJustMMA)
-        AheadPredictedBlock = 0;
-      if (NotJustMMA)
-      {
-        int index = (AheadPredictedBlock) & (FNL_NBENTRIES - 1);
-        // avoid issing prefetch the block if the previous block was prefetched
-
-        PrefCodeBlock (AheadPredictedBlock);
-
-        if (WorthPF[index] > 0)
-        {
-          for (int i = 1; i <= MAXFNL; i++)
-          {
-            uint64_t pf_Block = AheadPredictedBlock + i;
-            if ((WasNotJustFnl (AheadPredictedBlock))
-                || (i == MAXFNL))
-              PrefCodeBlock (pf_Block);
-            if (WorthPF[(index + i) & (FNL_NBENTRIES - 1)] == 0)
-              break;
-          }
-#ifdef  FITERFNLON
-          JustFnl (AheadPredictedBlock);
-#endif
-        }
-
-      }
-    }
+    AheadPredictedBlock = AHEADphist.AheadPredict ((v_addr >> 2) ^ (PREVADDR[NSHIFT - 1] << 1));
+    cout << hex << "MMA-AHEADphist -> v_addr: 0x" << v_addr << ", AheadPredictedBlock: 0x" << AheadPredictedBlock << dec << endl;
+    AheadPredictedBlock = PrefAheadPredictedBlock(AheadPredictedBlock, *this);
 
     //First access resulted in a miss
     if (AheadPredictedBlock == 0)
     {
       //////////////
-
       AheadPredictedBlock = AHEAD.AheadPredict (v_addr >> 2);
+      cout << hex << "MMA-AHEAD -> v_addr: 0x" << v_addr << ", AheadPredictedBlock: 0x" << AheadPredictedBlock << dec << endl;
 
-      if (AheadPredictedBlock != 0)
-      {
-        bool NotJustMMA = true;
-        for (int i = MMA_FILT_SIZE - 1; i >= 0; i--)
-        {
-          if (PREVPRED[i] == (AheadPredictedBlock))
-          {
-            NotJustMMA = false;
-            break;
-          }
-        }
-
-        if (!NotJustMMA)
-          AheadPredictedBlock = 0;
-        if (NotJustMMA)
-        {
-          int index = (AheadPredictedBlock) & (FNL_NBENTRIES - 1);
-          // avoid issing prefetch the block if the previous block was prefetched
-
-          PrefCodeBlock (AheadPredictedBlock);
-
-          if (WorthPF[index] > 0)
-          {
-            for (int i = 1; i <= MAXFNL; i++)
-            {
-              uint64_t pf_Block = AheadPredictedBlock + i;
-              if ((WasNotJustFnl (AheadPredictedBlock))
-                  || (i == MAXFNL))
-                PrefCodeBlock (pf_Block);
-              if (WorthPF[(index + i) & (FNL_NBENTRIES - 1)] == 0)
-                break;
-            }
-#ifdef  FITERFNLON
-            JustFnl (AheadPredictedBlock);
-#endif
-          }
-
-        }
-      }
+      AheadPredictedBlock = PrefAheadPredictedBlock(AheadPredictedBlock, *this);
     }			//else PrefetchCandidate=0;
           /////
     if ((Block != (PREVADDR[0] >> 4) + 1) || (MAXFNL == 0))
@@ -428,11 +415,8 @@ O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
       if ((PREFCAND[AHEAD.distahead] != 0) & (PREFCAND[AHEAD.distahead] !=
             Block))
         AHEADphist.LinkAhead (Block,
-            PREVADDR[AHEADphist.
-            distahead] ^ (PREVADDR[AHEADphist.
-              distahead +
-              NSHIFT] <<
-              1), cache_hit);
+            PREVADDR[AHEADphist.distahead] ^ (PREVADDR[AHEADphist.distahead + NSHIFT] << 1),
+            cache_hit);
     }
 
 
