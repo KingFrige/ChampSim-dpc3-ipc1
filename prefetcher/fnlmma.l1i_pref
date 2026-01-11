@@ -348,7 +348,7 @@ O3_CPU::l1i_prefetcher_cache_operate (uint64_t v_addr,
     if (Touched[previndex])	//if ((index & 63)!=0)
     {			//the previous block was read not so long ago: it was worth prefetching this block
       if ((cache_hit == 0) || (WorthPF[previndex]))	// this allows to reduce the pressure on L2
-        WorthPF[previndex] = 3;
+        WorthPF[index] = 3;
     }
 
     cout << dec << "start ptReset: " << ptReset << endl;
